@@ -18,10 +18,13 @@ app.use(cors({
         "http://localhost:5173",
         "http://192.168.1.28:5173",
         "http://localhost:8081",
-        "exp://192.168.1.28:8081"
+        "exp://192.168.1.28:8081",
+        "https://adstudioproject.netlify.app" // ✅ FIX
     ],
     credentials: true
 }));
+
+app.options("*", cors()); // ✅ FIX
 
 /* ================= BODY ================= */
 

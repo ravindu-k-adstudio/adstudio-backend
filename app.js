@@ -14,17 +14,22 @@ const app = express();
 /* ================= CORS ================= */
 
 app.use(cors({
-    origin: [
-        "http://localhost:5173",
-        "http://192.168.1.28:5173",
-        "http://localhost:8081",
-        "exp://192.168.1.28:8081",
-        "https://adstudioproject.netlify.app" // ✅ FIX
-    ],
+    origin: true,
     credentials: true
 }));
 
-app.options("*", cors()); // ✅ FIX
+app.use((req, res, next) => {
+    res.header("Access-Control-Allow-Origin", req.headers.origin);
+    res.header("Access-Control-Allow-Credentials", "true");
+    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+
+    if (req.method === "OPTIONS") {
+        return res.sendStatus(200);
+    }
+
+    next();
+});
 
 /* ================= BODY ================= */
 

@@ -1,103 +1,145 @@
 import express from "express";
-import jwt from "jsonwebtoken";
+
 import User from "../models/User.js";
+
 import { protect } from "../middleware/auth.middleware.js";
-import { PLANS } from "../config/plans.js";
 
 const router = express.Router();
 
-/* ---------------- UPGRADE PLAN ---------------- */
-router.post("/upgrade", protect, async (req, res) => {
-    try {
-        const { plan } = req.body;
 
-        if (!PLANS[plan]) {
-            return res.status(400).json({ message: "Invalid plan" });
-        }
-
-        const user = await User.findById(req.user.userId);
-
-        user.plan = plan;
-        user.adsCreated = 0;
-        await user.save();
-
-        const token = jwt.sign(
-            { userId: user._id, plan: user.plan },
-            process.env.JWT_SECRET,
-            { expiresIn: "7d" }
-        );
-
-        res.json({
-            success: true,
-            token,
-            user: {
-                id: user._id,
-                name: user.name,
-                email: user.email,
-                plan: user.plan,
-                adsCreated: user.adsCreated
-            }
-        });
-    } catch {
-        res.status(500).json({ message: "Server error" });
-    }
-});
-
-/* ---------------- CONSUME CREDIT ---------------- */
+/*
+|--------------------------------------------------------------------------
+| CONSUME ONE DOWNLOAD/SHARE CREDIT
+|--------------------------------------------------------------------------
+|
+| This endpoint is called immediately before:
+|
+| - Download
+| - Share
+|
+| Creating/saving/editing an ad does NOT call this endpoint.
+|
+*/
 
 router.post("/consume", protect, async (req, res) => {
     try {
-        const user = await User.findById(req.user.userId);
 
-        if (!user) {
-            return res.status(404).json({ message: "User not found" });
+        /*
+         * First check the user.
+         */
+        const existingUser =
+            await User.findById(req.user.userId);
+
+        if (!existingUser) {
+            return res.status(404).json({
+                allowed: false,
+                message: "User not found"
+            });
         }
 
-        // 🔴 STEP 1 — BLOCK IF NOT PAID
-        if (!user.hasPaid) {
+
+        /*
+         * USER HAS NOT PAID
+         */
+        if (!existingUser.hasPaid) {
             return res.status(403).json({
                 allowed: false,
-                message: "Please purchase a plan"
+                code: "PAYMENT_REQUIRED",
+                message:
+                    "Please purchase a plan before downloading or sharing."
             });
         }
 
-        const planKey = user.plan;
-        const planConfig = PLANS[planKey];
 
-        if (!planConfig) {
-            return res.status(400).json({
-                message: "Invalid plan",
-                plan: user.plan
-            });
-        }
-
-        // 🟡 STEP 2 — CHECK PLAN LIMIT
+        /*
+         * LIFETIME
+         *
+         * Lifetime users don't consume credits.
+         */
         if (
-            planConfig.ads !== Infinity &&
-            user.adsCreated >= planConfig.ads
+            existingUser.plan === "lifetime"
         ) {
-            return res.status(403).json({
-                allowed: false,
-                message: "Ad limit reached. Upgrade your plan."
+            return res.json({
+                allowed: true,
+                unlimited: true,
+                remaining: null
             });
         }
 
-        // 🟢 STEP 3 — INCREMENT USAGE
-        user.adsCreated += 1;
-        await user.save();
 
-        res.json({
+        /*
+         * NORMAL PAID PLANS
+         *
+         * Atomically decrement exactly one credit.
+         *
+         * The condition downloadCredits > 0 is inside the
+         * database query itself.
+         *
+         * This prevents two simultaneous requests from
+         * spending the same final credit.
+         */
+        const user =
+            await User.findOneAndUpdate(
+                {
+                    _id: req.user.userId,
+
+                    hasPaid: true,
+
+                    plan: {
+                        $ne: "lifetime"
+                    },
+
+                    downloadCredits: {
+                        $gt: 0
+                    }
+                },
+
+                {
+                    $inc: {
+                        downloadCredits: -1
+                    }
+                },
+
+                {
+                    new: true
+                }
+            );
+
+
+        /*
+         * No credit was available.
+         */
+        if (!user) {
+            return res.status(403).json({
+                allowed: false,
+                code: "CREDITS_EMPTY",
+                message:
+                    "Your Download/Share credits are finished. Please purchase or upgrade your plan."
+            });
+        }
+
+
+        /*
+         * SUCCESS
+         */
+        return res.json({
             allowed: true,
-            usedAds: user.adsCreated,
+            unlimited: false,
             remaining:
-                planConfig.ads === Infinity
-                    ? Infinity
-                    : planConfig.ads - user.adsCreated
+                user.downloadCredits
         });
 
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ message: "Server error" });
+    } catch (error) {
+
+        console.error(
+            "CONSUME DOWNLOAD CREDIT ERROR:",
+            error
+        );
+
+        return res.status(500).json({
+            allowed: false,
+            message: "Server error"
+        });
     }
 });
 

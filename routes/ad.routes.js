@@ -27,7 +27,7 @@ router.post("/save", protect, async (req, res) => {
 
         await User.findByIdAndUpdate(req.user.userId, {
             $push: { ads: ad._id },
-            // $inc: { adsCreated: 1 } 
+
         });
 
         res.status(201).json({ success: true, ad });
@@ -85,30 +85,41 @@ router.get("/my", protect, async (req, res) => {
     }
 });
 
-/* ---------------- DELETE AD ---------------- */
+
+
 router.delete("/:id", protect, async (req, res) => {
     try {
         const adId = req.params.id;
 
-        // Find the ad and ensure it belongs to the user
-        const ad = await Ad.findOne({ _id: adId, user: req.user.userId });
-        if (!ad) {
-            return res.status(404).json({ message: "Ad not found or not authorized" });
-        }
-
-        // Delete the ad
-        await Ad.findByIdAndDelete(adId);
-
-        // Update user document: remove ad id and decrement adsCreated
-        await User.findByIdAndUpdate(req.user.userId, {
-            $pull: { ads: adId },
-            $inc: { adsCreated: -1 }
+        const ad = await Ad.findOne({
+            _id: adId,
+            user: req.user.userId
         });
 
-        res.json({ success: true, message: "Ad deleted successfully" });
+        if (!ad) {
+            return res.status(404).json({
+                message:
+                    "Ad not found or not authorized"
+            });
+        }
+
+        await Ad.findByIdAndDelete(adId);
+
+        res.json({
+            success: true,
+            message: "Ad deleted successfully"
+        });
+
     } catch (err) {
-        console.error("DELETE AD ERROR:", err);
-        res.status(500).json({ message: "Server error" });
+
+        console.error(
+            "DELETE AD ERROR:",
+            err
+        );
+
+        res.status(500).json({
+            message: "Server error"
+        });
     }
 });
 

@@ -1,17 +1,21 @@
 export const PLANS = {
     starter: {
-        ads: 3
+        downloads: 5
     },
+
     basic: {
-        ads: 5
+        downloads: 7
     },
+
     growth: {
-        ads: 10
+        downloads: 15
     },
+
     scale: {
-        ads: 30
+        downloads: 40
     },
+
     lifetime: {
-        ads: Infinity
+        downloads: Infinity
     }
 };

@@ -14,21 +14,23 @@ const router = express.Router();
 | PAYHERE CONFIGURATION
 |--------------------------------------------------------------------------
 |
-| Keep these ONLY in backend .env.
+| Keep these ONLY in backend environment variables.
 |
 | Never expose PAYHERE_MERCHANT_SECRET to React/Vite.
 |
 */
 
-const MERCHANT_ID = process.env.PAYHERE_MERCHANT_ID;
-const MERCHANT_SECRET = process.env.PAYHERE_MERCHANT_SECRET;
+const MERCHANT_ID =
+    process.env.PAYHERE_MERCHANT_ID;
+
+const MERCHANT_SECRET =
+    process.env.PAYHERE_MERCHANT_SECRET;
 
 const FRONTEND_URL =
-    process.env.FRONTEND_URL || "http://localhost:5173";
+    process.env.FRONTEND_URL;
 
 const PAYHERE_NOTIFY_URL =
-    process.env.PAYHERE_NOTIFY_URL ||
-    "https://YOUR_PUBLIC_BACKEND_DOMAIN/api/payment/notify";
+    process.env.PAYHERE_NOTIFY_URL;
 
 
 /*
@@ -38,7 +40,7 @@ const PAYHERE_NOTIFY_URL =
 |
 | The backend is the source of truth for prices.
 |
-| Do NOT accept the price from React.
+| Never accept the price from React.
 |
 */
 
@@ -55,10 +57,22 @@ const PLAN_PRICES = {
 |--------------------------------------------------------------------------
 | PAYHERE CHECKOUT URL
 |--------------------------------------------------------------------------
+|
+| LIVE:
+| https://www.payhere.lk/pay/checkout
+|
+| SANDBOX:
+| https://sandbox.payhere.lk/pay/checkout
+|
+| Current value is LIVE.
+|
 */
 
+// const PAYHERE_CHECKOUT_URL = 
+//     "https://www.payhere.lk/pay/checkout";
+
 const PAYHERE_CHECKOUT_URL =
-    "https://www.payhere.lk/pay/checkout";
+    "https://sandbox.payhere.lk/pay/checkout";
 
 
 /*
@@ -71,53 +85,73 @@ const PAYHERE_CHECKOUT_URL =
 | POST /api/payment/create
 |
 | body:
+|
 | {
-|     "plan": "starter"
+|     plan: "starter",
+|
+|     customer: {
+|         phone: "...",
+|         address: "...",
+|         city: "...",
+|         country: "Sri Lanka"
+|     }
 | }
 |
 */
 
 router.post("/create", protect, async (req, res) => {
     try {
-        const { plan } = req.body;
+
+        const {
+            plan,
+            customer
+        } = req.body;
+
 
         /*
-         * Validate plan on the server.
+         * Validate plan.
          */
-        if (!plan || !PLANS[plan]) {
+        if (
+            !plan ||
+            !PLANS[plan] ||
+            !PLAN_PRICES[plan]
+        ) {
             return res.status(400).json({
                 message: "Invalid plan"
             });
         }
 
-        /*
-         * Make sure price exists.
-         */
-        const amount = PLAN_PRICES[plan];
-
-        if (!amount) {
-            return res.status(400).json({
-                message: "Plan price is not configured"
-            });
-        }
 
         /*
-         * Make sure PayHere credentials exist.
+         * Make sure PayHere configuration exists.
          */
-        if (!MERCHANT_ID || !MERCHANT_SECRET) {
+        if (
+            !MERCHANT_ID ||
+            !MERCHANT_SECRET ||
+            !FRONTEND_URL ||
+            !PAYHERE_NOTIFY_URL
+        ) {
             console.error(
-                "PayHere Merchant ID or Merchant Secret is missing"
+                "PayHere configuration is incomplete. " +
+                "Check PAYHERE_MERCHANT_ID, " +
+                "PAYHERE_MERCHANT_SECRET, " +
+                "FRONTEND_URL and PAYHERE_NOTIFY_URL."
             );
 
             return res.status(500).json({
-                message: "Payment system is not configured"
+                message:
+                    "Payment system is not configured"
             });
         }
 
+
         /*
-         * Get authenticated user from database.
+         * Get authenticated user.
          */
-        const user = await User.findById(req.user.userId);
+        const user =
+            await User.findById(
+                req.user.userId
+            );
 
         if (!user) {
             return res.status(404).json({
@@ -125,54 +159,159 @@ router.post("/create", protect, async (req, res) => {
             });
         }
 
+
+        /*
+         * Customer details are required by PayHere.
+         *
+         * We deliberately collect these at payment time
+         * instead of forcing them into signup.
+         */
+        const phone =
+            customer?.phone?.trim();
+
+        const address =
+            customer?.address?.trim();
+
+        const city =
+            customer?.city?.trim();
+
+        const country =
+            customer?.country?.trim() ||
+            "Sri Lanka";
+
+
+        /*
+         * Validate customer details BEFORE creating
+         * the pending Payment record.
+         */
+        if (!phone) {
+            return res.status(400).json({
+                code: "CUSTOMER_DETAILS_REQUIRED",
+                field: "phone",
+                message:
+                    "Please enter your phone number."
+            });
+        }
+
+        if (phone.length < 7) {
+            return res.status(400).json({
+                code: "CUSTOMER_DETAILS_INVALID",
+                field: "phone",
+                message:
+                    "Please enter a valid phone number."
+            });
+        }
+
+        if (!address) {
+            return res.status(400).json({
+                code: "CUSTOMER_DETAILS_REQUIRED",
+                field: "address",
+                message:
+                    "Please enter your address."
+            });
+        }
+
+        if (address.length < 3) {
+            return res.status(400).json({
+                code: "CUSTOMER_DETAILS_INVALID",
+                field: "address",
+                message:
+                    "Please enter a valid address."
+            });
+        }
+
+        if (!city) {
+            return res.status(400).json({
+                code: "CUSTOMER_DETAILS_REQUIRED",
+                field: "city",
+                message:
+                    "Please enter your city."
+            });
+        }
+
+        if (city.length < 2) {
+            return res.status(400).json({
+                code: "CUSTOMER_DETAILS_INVALID",
+                field: "city",
+                message:
+                    "Please enter a valid city."
+            });
+        }
+
+
+        /*
+         * Save customer information to the user's account.
+         *
+         * This means the user only needs to enter these details
+         * the first time.
+         *
+         * It also keeps the information available for
+         * future PayHere purchases.
+         */
+        user.phone = phone;
+        user.address = address;
+        user.city = city;
+
+        await user.save();
+
+
         /*
          * Generate a unique order ID.
-         *
-         * We do NOT parse the user/plan later from this string.
-         * The payment record and custom parameters handle that.
          */
         const orderId =
             `ADSTUDIO_${user._id}_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
 
+
+        /*
+         * Server-side price.
+         */
+        const amount =
+            PLAN_PRICES[plan];
+
         const formattedAmount =
             Number(amount).toFixed(2);
 
-        const currency = "USD";
+        const currency =
+            "USD";
+
 
         /*
-         * PayHere hash:
+         * PayHere checkout hash:
          *
          * MD5(
          *   merchant_id +
          *   order_id +
-         *   amount +
+         *   formatted amount +
          *   currency +
          *   MD5(merchant_secret)
          * )
          *
-         * The merchant secret MUST stay on the server.
+         * Merchant Secret NEVER leaves the backend.
          */
-        const merchantSecretHash = crypto
-            .createHash("md5")
-            .update(MERCHANT_SECRET)
-            .digest("hex")
-            .toUpperCase();
+        const merchantSecretHash =
+            crypto
+                .createHash("md5")
+                .update(MERCHANT_SECRET)
+                .digest("hex")
+                .toUpperCase();
 
-        const hash = crypto
-            .createHash("md5")
-            .update(
-                MERCHANT_ID +
-                orderId +
-                formattedAmount +
-                currency +
-                merchantSecretHash
-            )
-            .digest("hex")
-            .toUpperCase();
+        const hash =
+            crypto
+                .createHash("md5")
+                .update(
+                    MERCHANT_ID +
+                    orderId +
+                    formattedAmount +
+                    currency +
+                    merchantSecretHash
+                )
+                .digest("hex")
+                .toUpperCase();
+
 
         /*
-         * Save payment as pending BEFORE sending the customer
-         * to PayHere.
+         * Save payment as pending BEFORE sending
+         * customer to PayHere.
          */
         await Payment.create({
             user: user._id,
@@ -183,51 +322,39 @@ router.post("/create", protect, async (req, res) => {
             status: "pending"
         });
 
-        /*
-         * PayHere requires customer contact information.
-         *
-         * Your current User model only contains name/email.
-         *
-         * Therefore the frontend must eventually collect the
-         * user's real phone/address/city.
-         *
-         * For safety, we refuse to create a payment until those
-         * values exist rather than sending fake information.
-         */
-        if (
-            !user.phone ||
-            !user.address ||
-            !user.city
-        ) {
-            return res.status(400).json({
-                message:
-                    "Please complete your phone, address and city before making a payment.",
-                code: "CUSTOMER_DETAILS_REQUIRED"
-            });
-        }
 
+        /*
+         * Split user's existing name.
+         */
         const nameParts =
-            user.name.trim().split(/\s+/);
+            user.name
+                .trim()
+                .split(/\s+/);
 
         const firstName =
-            nameParts.shift() || "Customer";
+            nameParts.shift() ||
+            "Customer";
 
         const lastName =
-            nameParts.join(" ") || "Customer";
+            nameParts.join(" ") ||
+            "Customer";
+
 
         /*
-         * Return payment data to React.
+         * Return PayHere form data to React.
          *
-         * React will create an HTML form and POST these values
-         * directly to PayHere.
+         * React will submit this as an HTML POST form.
          */
         return res.json({
             success: true,
 
-            checkoutUrl: PAYHERE_CHECKOUT_URL,
+            checkoutUrl:
+                PAYHERE_CHECKOUT_URL,
 
             payment: {
-                merchant_id: MERCHANT_ID,
+
+                merchant_id:
+                    MERCHANT_ID,
 
                 return_url:
                     `${FRONTEND_URL}/payment-success?order_id=${encodeURIComponent(orderId)}`,
@@ -238,45 +365,60 @@ router.post("/create", protect, async (req, res) => {
                 notify_url:
                     PAYHERE_NOTIFY_URL,
 
-                first_name: firstName,
+                first_name:
+                    firstName,
 
-                last_name: lastName,
+                last_name:
+                    lastName,
 
-                email: user.email,
+                email:
+                    user.email,
 
-                phone: user.phone,
+                phone:
+                    phone,
 
-                address: user.address,
+                address:
+                    address,
 
-                city: user.city,
+                city:
+                    city,
 
-                country: "Sri Lanka",
+                country:
+                    country,
 
-                order_id: orderId,
+                order_id:
+                    orderId,
 
                 items:
                     `AdStudio ${plan} Plan`,
 
-                currency,
+                currency:
+                    currency,
 
-                amount: formattedAmount,
+                amount:
+                    formattedAmount,
 
-                hash,
+                hash:
+                    hash,
 
-                custom_1: user._id.toString(),
+                custom_1:
+                    user._id.toString(),
 
-                custom_2: plan
+                custom_2:
+                    plan
             }
         });
 
     } catch (error) {
+
         console.error(
             "PAYHERE CREATE ERROR:",
             error
         );
 
         return res.status(500).json({
-            message: "Unable to create payment"
+            message:
+                "Unable to create payment"
         });
     }
 });
@@ -292,12 +434,13 @@ router.post("/create", protect, async (req, res) => {
 | POST /api/payment/notify
 |
 | IMPORTANT:
-| Express urlencoded middleware is already enabled in app.js.
+| This receives application/x-www-form-urlencoded data.
 |
 */
 
 router.post("/notify", async (req, res) => {
     try {
+
         const {
             merchant_id,
             order_id,
@@ -310,6 +453,7 @@ router.post("/notify", async (req, res) => {
             custom_2
         } = req.body;
 
+
         console.log(
             "PayHere notification received:",
             {
@@ -318,6 +462,7 @@ router.post("/notify", async (req, res) => {
                 status_code
             }
         );
+
 
         /*
          * Basic validation.
@@ -338,10 +483,14 @@ router.post("/notify", async (req, res) => {
             return res.sendStatus(400);
         }
 
+
         /*
-         * Confirm this notification belongs to our merchant.
+         * Confirm merchant.
          */
-        if (merchant_id !== MERCHANT_ID) {
+        if (
+            merchant_id !==
+            MERCHANT_ID
+        ) {
             console.error(
                 "Invalid PayHere merchant ID"
             );
@@ -349,29 +498,36 @@ router.post("/notify", async (req, res) => {
             return res.sendStatus(400);
         }
 
+
         /*
-         * Verify PayHere's notification signature.
+         * Verify PayHere notification signature.
          */
-        const merchantSecretHash = crypto
-            .createHash("md5")
-            .update(MERCHANT_SECRET)
-            .digest("hex")
-            .toUpperCase();
+        const merchantSecretHash =
+            crypto
+                .createHash("md5")
+                .update(MERCHANT_SECRET)
+                .digest("hex")
+                .toUpperCase();
 
-        const localMd5 = crypto
-            .createHash("md5")
-            .update(
-                merchant_id +
-                order_id +
-                payhere_amount +
-                payhere_currency +
-                status_code +
-                merchantSecretHash
-            )
-            .digest("hex")
-            .toUpperCase();
+        const localMd5 =
+            crypto
+                .createHash("md5")
+                .update(
+                    merchant_id +
+                    order_id +
+                    payhere_amount +
+                    payhere_currency +
+                    status_code +
+                    merchantSecretHash
+                )
+                .digest("hex")
+                .toUpperCase();
 
-        if (localMd5 !== md5sig) {
+
+        if (
+            localMd5 !==
+            md5sig
+        ) {
             console.error(
                 "Invalid PayHere notification signature"
             );
@@ -379,13 +535,14 @@ router.post("/notify", async (req, res) => {
             return res.sendStatus(400);
         }
 
+
         /*
-         * Find the payment we created before redirecting
-         * the customer to PayHere.
+         * Find our payment record.
          */
-        const payment = await Payment.findOne({
-            orderId: order_id
-        });
+        const payment =
+            await Payment.findOne({
+                orderId: order_id
+            });
 
         if (!payment) {
             console.error(
@@ -396,68 +553,146 @@ router.post("/notify", async (req, res) => {
             return res.sendStatus(404);
         }
 
+
         /*
-         * Idempotency:
+         * Idempotency.
          *
-         * If PayHere sends the same successful notification
-         * again, DO NOT grant another package.
+         * Once this order has already been successfully
+         * processed, never grant it again.
          */
         if (
-            payment.status === "success" &&
-            payment.paymentId === payment_id
+            payment.status ===
+            "success"
         ) {
             return res.sendStatus(200);
         }
 
-        /*
-         * Record the PayHere payment ID.
-         */
-        payment.paymentId = payment_id;
 
         /*
-         * Handle unsuccessful payments.
+         * Record PayHere payment ID.
          */
-        if (String(status_code) !== "2") {
+        payment.paymentId =
+            payment_id;
 
-            if (String(status_code) === "-1") {
-                payment.status = "cancelled";
-            } else if (String(status_code) === "-3") {
-                payment.status = "chargedback";
-            } else {
-                payment.status = "failed";
-            }
+
+        /*
+         * Handle payment status.
+         *
+         * 2   = success
+         * 0   = pending
+         * -1  = cancelled
+         * -2  = failed
+         * -3  = chargedback
+         */
+        if (
+            String(status_code) ===
+            "0"
+        ) {
+
+            payment.status =
+                "pending";
 
             await payment.save();
 
             return res.sendStatus(200);
         }
 
+
+        if (
+            String(status_code) ===
+            "-1"
+        ) {
+
+            payment.status =
+                "cancelled";
+
+            await payment.save();
+
+            return res.sendStatus(200);
+        }
+
+
+        if (
+            String(status_code) ===
+            "-3"
+        ) {
+
+            payment.status =
+                "chargedback";
+
+            await payment.save();
+
+            return res.sendStatus(200);
+        }
+
+
+        if (
+            String(status_code) ===
+            "-2"
+        ) {
+
+            payment.status =
+                "failed";
+
+            await payment.save();
+
+            return res.sendStatus(200);
+        }
+
+
         /*
-         * Confirm the amount and currency against the plan
-         * we created on our server.
+         * Only status 2 can grant credits.
+         */
+        if (
+            String(status_code) !==
+            "2"
+        ) {
+
+            payment.status =
+                "failed";
+
+            await payment.save();
+
+            return res.sendStatus(200);
+        }
+
+
+        /*
+         * Confirm amount against our database.
          */
         const expectedAmount =
-            PLAN_PRICES[payment.plan];
+            PLAN_PRICES[
+            payment.plan
+            ];
 
         if (
             Number(payhere_amount).toFixed(2) !==
             Number(expectedAmount).toFixed(2)
         ) {
+
             console.error(
                 "PayHere amount mismatch:",
                 {
-                    expected: expectedAmount,
-                    received: payhere_amount
+                    expected:
+                        expectedAmount,
+
+                    received:
+                        payhere_amount
                 }
             );
 
             return res.sendStatus(400);
         }
 
+
+        /*
+         * Confirm currency.
+         */
         if (
             payhere_currency !==
             payment.currency
         ) {
+
             console.error(
                 "PayHere currency mismatch"
             );
@@ -465,13 +700,16 @@ router.post("/notify", async (req, res) => {
             return res.sendStatus(400);
         }
 
+
         /*
-         * The custom user ID must match the payment record.
+         * Confirm custom user ID.
          */
         if (
             custom_1 &&
-            custom_1 !== payment.user.toString()
+            custom_1 !==
+            payment.user.toString()
         ) {
+
             console.error(
                 "Payment user mismatch"
             );
@@ -479,13 +717,16 @@ router.post("/notify", async (req, res) => {
             return res.sendStatus(400);
         }
 
+
         /*
-         * The custom plan must match the payment record.
+         * Confirm custom plan.
          */
         if (
             custom_2 &&
-            custom_2 !== payment.plan
+            custom_2 !==
+            payment.plan
         ) {
+
             console.error(
                 "Payment plan mismatch"
             );
@@ -493,59 +734,85 @@ router.post("/notify", async (req, res) => {
             return res.sendStatus(400);
         }
 
+
         /*
-         * Find the user.
+         * Find user.
          */
-        const user = await User.findById(
-            payment.user
-        );
+        const user =
+            await User.findById(
+                payment.user
+            );
 
         if (!user) {
             return res.sendStatus(404);
         }
 
+
         /*
          * SUCCESS
          *
-         * The user gets the credits belonging to the
-         * purchased package.
+         * Only now do we grant the purchased plan.
          */
         user.hasPaid = true;
-        user.plan = payment.plan;
 
-        if (payment.plan === "lifetime") {
-            /*
-             * Lifetime is unlimited.
-             * We don't store Infinity in MongoDB.
-             */
-            user.downloadCredits = 0;
-        } else {
+        user.plan =
+            payment.plan;
+
+
+        /*
+         * Lifetime = unlimited.
+         *
+         * We do not store Infinity in MongoDB.
+         */
+        if (
+            payment.plan ===
+            "lifetime"
+        ) {
+
             user.downloadCredits =
-                PLANS[payment.plan].downloads;
+                0;
+
+        } else {
+
+            user.downloadCredits =
+                PLANS[
+                    payment.plan
+                ].downloads;
         }
+
 
         await user.save();
 
+
         /*
-         * Mark payment successful only AFTER the user
-         * has been successfully updated.
+         * Mark payment successful only AFTER
+         * the user was successfully updated.
          */
-        payment.status = "success";
+        payment.status =
+            "success";
 
         await payment.save();
+
 
         console.log(
             "PAYMENT SUCCESS:",
             {
-                user: user.email,
-                plan: payment.plan,
-                paymentId: payment_id
+                user:
+                    user.email,
+
+                plan:
+                    payment.plan,
+
+                paymentId:
+                    payment_id
             }
         );
+
 
         return res.sendStatus(200);
 
     } catch (error) {
+
         console.error(
             "PAYHERE NOTIFY ERROR:",
             error
@@ -557,3 +824,4 @@ router.post("/notify", async (req, res) => {
 
 
 export default router;
+

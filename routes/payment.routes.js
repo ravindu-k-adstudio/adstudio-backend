@@ -64,12 +64,9 @@ const PLAN_PRICES = {
 | SANDBOX:
 | https://sandbox.payhere.lk/pay/checkout
 |
-| Current value is LIVE.
+| Current environment: SANDBOX
 |
 */
-
-// const PAYHERE_CHECKOUT_URL = 
-//     "https://www.payhere.lk/pay/checkout";
 
 const PAYHERE_CHECKOUT_URL =
     "https://sandbox.payhere.lk/pay/checkout";
@@ -163,8 +160,8 @@ router.post("/create", protect, async (req, res) => {
         /*
          * Customer details are required by PayHere.
          *
-         * We deliberately collect these at payment time
-         * instead of forcing them into signup.
+         * These are collected during payment rather
+         * than during signup.
          */
         const phone =
             customer?.phone?.trim();
@@ -176,8 +173,7 @@ router.post("/create", protect, async (req, res) => {
             customer?.city?.trim();
 
         const country =
-            customer?.country?.trim() ||
-            "Sri Lanka";
+            customer?.country?.trim();
 
 
         /*
@@ -238,19 +234,39 @@ router.post("/create", protect, async (req, res) => {
             });
         }
 
+        if (!country) {
+            return res.status(400).json({
+                code: "CUSTOMER_DETAILS_REQUIRED",
+                field: "country",
+                message:
+                    "Please select your country."
+            });
+        }
+
+        if (country.length < 2) {
+            return res.status(400).json({
+                code: "CUSTOMER_DETAILS_INVALID",
+                field: "country",
+                message:
+                    "Please select a valid country."
+            });
+        }
+
 
         /*
          * Save customer information to the user's account.
          *
-         * This means the user only needs to enter these details
-         * the first time.
-         *
-         * It also keeps the information available for
-         * future PayHere purchases.
+         * Phone, address and city are saved so they can
+         * be prefilled during future purchases.
          */
-        user.phone = phone;
-        user.address = address;
-        user.city = city;
+        user.phone =
+            phone;
+
+        user.address =
+            address;
+
+        user.city =
+            city;
 
         await user.save();
 
@@ -343,7 +359,7 @@ router.post("/create", protect, async (req, res) => {
         /*
          * Return PayHere form data to React.
          *
-         * React will submit this as an HTML POST form.
+         * React submits this as an HTML POST form.
          */
         return res.json({
             success: true,
@@ -753,7 +769,8 @@ router.post("/notify", async (req, res) => {
          *
          * Only now do we grant the purchased plan.
          */
-        user.hasPaid = true;
+        user.hasPaid =
+            true;
 
         user.plan =
             payment.plan;
@@ -824,4 +841,3 @@ router.post("/notify", async (req, res) => {
 
 
 export default router;
-

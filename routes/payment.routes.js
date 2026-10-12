@@ -69,7 +69,7 @@ const PLAN_PRICES = {
 */
 
 const PAYHERE_CHECKOUT_URL =
-    "https://sandbox.payhere.lk/pay/checkout";
+    "https://www.payhere.lk/pay/checkout";
 
 
 /*
